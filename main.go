@@ -27,11 +27,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize program: %v", err)
 	}
-	if err, done := tea.NewProgram(p).Run(); err != nil {
+
+	// Create a new Program with the quiet renderer option
+	prog := tea.NewProgram(p, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+	if _, err := prog.Run(); err != nil {
 		fmt.Printf("Error running program: %v\n", err)
-		return
-	} else if done != nil {
-		fmt.Println("Program exited without error")
 	}
 }
 
