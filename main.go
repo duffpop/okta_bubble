@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -14,8 +15,8 @@ import (
 )
 
 const (
-	oktaOrgURL   = "https://dev-21460697.okta.com"              // Update with your Okta org URL
-	oktaAPIToken = "002sKQ11oskWXaG150Q2-ichuW4lrO7WwxfWQbjUmM" // Update with a valid API token for your Okta org
+	oktaOrgURLEnv   = "OKTA_ORG_URL"
+	oktaAPITokenEnv = "OKTA_API_TOKEN"
 )
 
 type oktaUser struct {
@@ -23,7 +24,14 @@ type oktaUser struct {
 }
 
 func main() {
-	p, err := newProgram()
+	oktaOrgURL := os.Getenv(oktaOrgURLEnv)
+	oktaAPIToken := os.Getenv(oktaAPITokenEnv)
+
+	if oktaOrgURL == "" || oktaAPIToken == "" {
+		log.Fatalf("Environment variables %s and %s must be set", oktaOrgURLEnv, oktaAPITokenEnv)
+	}
+
+	p, err := newProgram(oktaOrgURL, oktaAPIToken)
 	if err != nil {
 		log.Fatalf("Failed to initialize program: %v", err)
 	}
@@ -46,7 +54,7 @@ type model struct {
 	client       *okta.Client
 }
 
-func newProgram() (*model, error) {
+func newProgram(oktaOrgURL, oktaAPIToken string) (*model, error) {
 	_, client, err := okta.NewClient(
 		context.TODO(),
 		okta.WithOrgUrl(oktaOrgURL),
