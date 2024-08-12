@@ -33,10 +33,10 @@ func main() {
 
 	p, err := newProgram(oktaOrgURL, oktaAPIToken)
 	if err != nil {
-		log.Fatalf("Failed to initialize program: %v", err)
+		log.Fatalf("Failed to initialise program: %v", err)
 	}
 
-	// Create a new Program with the quiet renderer option
+	// quiet renderer (avoids debug info)
 	prog := tea.NewProgram(p, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	if _, err := prog.Run(); err != nil {
@@ -71,7 +71,7 @@ func newProgram(oktaOrgURL, oktaAPIToken string) (*model, error) {
 		viewport:  viewport.New(0, 0),
 	}
 
-	// Fetch Okta users and initialize the model's list with them.
+	// fetch okta users and init list with them
 	if err := m.loadOktaUsers(); err != nil {
 		return nil, fmt.Errorf("failed to load Okta users: %w", err)
 	}
@@ -81,7 +81,7 @@ func newProgram(oktaOrgURL, oktaAPIToken string) (*model, error) {
 }
 
 func (m *model) Init() tea.Cmd {
-	return nil // No initialization commands needed for this example.
+	return nil // no init for this version
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -97,7 +97,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectedUser = nil
 				return m, nil
 			}
-			// Handle viewport scrolling
+			// viewport scrolling
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
@@ -156,15 +156,12 @@ var appStyle = lipgloss.NewStyle().Padding(1, 2)
 // 	return view
 // }
 
-// Add this method
 func (u oktaUser) FilterValue() string {
 	return u.Login
 }
 
-// Add this method
 func (u oktaUser) Title() string { return u.Login }
 
-// Add this method
 func (u oktaUser) Description() string { return "" }
 
 func (m *model) loadOktaUsers() error {
