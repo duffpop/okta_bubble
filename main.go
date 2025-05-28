@@ -28,13 +28,16 @@ func main() {
 	oktaOrgURL := os.Getenv(oktaOrgURLEnv)
 	oktaAPIToken := os.Getenv(oktaAPITokenEnv)
 
+	var p *model
+	var err error
+	
 	if oktaOrgURL == "" || oktaAPIToken == "" {
-		log.Fatalf("Environment variables %s and %s must be set", oktaOrgURLEnv, oktaAPITokenEnv)
-	}
-
-	p, err := newProgram(oktaOrgURL, oktaAPIToken)
-	if err != nil {
-		log.Fatalf("Failed to initialise program: %v", err)
+		p = newProgramWithEnvSetup()
+	} else {
+		p, err = newProgram(oktaOrgURL, oktaAPIToken)
+		if err != nil {
+			log.Fatalf("Failed to initialise program: %v", err)
+		}
 	}
 
 	// quiet renderer (avoids debug info)
@@ -48,7 +51,8 @@ func main() {
 type appState int
 
 const (
-	listView appState = iota
+	envSetupView appState = iota
+	listView
 	userDetailView
 	createUserView
 )
@@ -63,6 +67,14 @@ type model struct {
 	client       *okta.Client
 	state        appState
 	createForm   createUserForm
+	envForm      envSetupForm
+}
+
+type envSetupForm struct {
+	inputs     []textinput.Model
+	focused    int
+	fieldNames []string
+	connecting bool
 }
 
 type createUserForm struct {
@@ -91,6 +103,7 @@ func newProgram(oktaOrgURL, oktaAPIToken string) (*model, error) {
 		viewport:   viewport.New(0, 0),
 		state:      listView,
 		createForm: newCreateUserForm(),
+		envForm:    newEnvSetupForm(),
 	}
 
 	// fetch okta users and init list with them
@@ -100,6 +113,42 @@ func newProgram(oktaOrgURL, oktaAPIToken string) (*model, error) {
 	m.isLoading = false
 
 	return m, nil
+}
+
+func newProgramWithEnvSetup() *model {
+	return &model{
+		list:       list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0),
+		viewport:   viewport.New(0, 0),
+		state:      envSetupView,
+		createForm: newCreateUserForm(),
+		envForm:    newEnvSetupForm(),
+	}
+}
+
+func newEnvSetupForm() envSetupForm {
+	fieldNames := []string{"OKTA_ORG_URL", "OKTA_API_TOKEN"}
+	inputs := make([]textinput.Model, len(fieldNames))
+	
+	for i := range inputs {
+		inputs[i] = textinput.New()
+		inputs[i].Placeholder = fieldNames[i]
+		inputs[i].CharLimit = 256
+		inputs[i].Width = 60
+		
+		if fieldNames[i] == "OKTA_API_TOKEN" {
+			inputs[i].EchoMode = textinput.EchoPassword
+			inputs[i].EchoCharacter = '•'
+		}
+	}
+	
+	inputs[0].Focus()
+	
+	return envSetupForm{
+		inputs:     inputs,
+		focused:    0,
+		fieldNames: fieldNames,
+		connecting: false,
+	}
 }
 
 func newCreateUserForm() createUserForm {
@@ -143,6 +192,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		
 	case tea.KeyMsg:
 		switch m.state {
+		case envSetupView:
+			return m.updateEnvSetupView(msg)
 		case listView:
 			return m.updateListView(msg)
 		case userDetailView:
@@ -162,6 +213,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.createForm = newCreateUserForm()
 		return m, m.reloadUsers()
 		
+	case envConnectedMsg:
+		return m.handleConnection(msg)
+		
 	case error:
 		m.err = msg
 		return m, nil
@@ -175,6 +229,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 type userCreatedMsg struct{}
+type envConnectedMsg struct {
+	client *okta.Client
+}
 
 func (m *model) updateListView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
@@ -238,8 +295,40 @@ func (m *model) updateCreateUserView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *model) updateEnvSetupView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "tab", "down":
+		m.envForm.inputs[m.envForm.focused].Blur()
+		m.envForm.focused = (m.envForm.focused + 1) % len(m.envForm.inputs)
+		m.envForm.inputs[m.envForm.focused].Focus()
+		return m, nil
+	case "shift+tab", "up":
+		m.envForm.inputs[m.envForm.focused].Blur()
+		m.envForm.focused = (m.envForm.focused - 1 + len(m.envForm.inputs)) % len(m.envForm.inputs)
+		m.envForm.inputs[m.envForm.focused].Focus()
+		return m, nil
+	case "enter":
+		if m.canConnect() && !m.envForm.connecting {
+			m.envForm.connecting = true
+			return m, m.connectToOkta()
+		}
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	}
+	
+	var cmd tea.Cmd
+	m.envForm.inputs[m.envForm.focused], cmd = m.envForm.inputs[m.envForm.focused].Update(msg)
+	return m, cmd
+}
+
 func (m *model) View() string {
+	if m.err != nil {
+		return appStyle.Render(fmt.Sprintf("Error: %v\n\nPress 'q' to quit", m.err))
+	}
+	
 	switch m.state {
+	case envSetupView:
+		return m.renderEnvSetupForm()
 	case listView:
 		return appStyle.Render(m.list.View() + "\n\nPress 'n' to create new user, 'enter' to view details, 'q' to quit")
 	case userDetailView:
@@ -284,6 +373,75 @@ func (m *model) renderCreateUserForm() string {
 	b.WriteString("\n\nPress 'esc' to cancel, 'tab'/'down' to next field, 'shift+tab'/'up' to previous field")
 	
 	return appStyle.Render(b.String())
+}
+
+func (m *model) canConnect() bool {
+	for _, input := range m.envForm.inputs {
+		if strings.TrimSpace(input.Value()) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *model) renderEnvSetupForm() string {
+	var b strings.Builder
+	b.WriteString("Okta Configuration Setup\n")
+	b.WriteString("Please enter your Okta configuration details:\n\n")
+	
+	for i, input := range m.envForm.inputs {
+		fieldName := m.envForm.fieldNames[i]
+		b.WriteString(fmt.Sprintf("%s:\n", fieldName))
+		b.WriteString(input.View())
+		b.WriteString("\n\n")
+	}
+	
+	if m.envForm.connecting {
+		b.WriteString("Connecting to Okta...")
+	} else if m.canConnect() {
+		b.WriteString("Press 'enter' to connect")
+	} else {
+		b.WriteString("Please fill in all fields")
+	}
+	
+	b.WriteString("\n\nPress 'tab'/'down' to next field, 'shift+tab'/'up' to previous field, 'q' to quit")
+	
+	return appStyle.Render(b.String())
+}
+
+func (m *model) connectToOkta() tea.Cmd {
+	return func() tea.Msg {
+		oktaOrgURL := strings.TrimSpace(m.envForm.inputs[0].Value())
+		oktaAPIToken := strings.TrimSpace(m.envForm.inputs[1].Value())
+		
+		_, client, err := okta.NewClient(
+			context.TODO(),
+			okta.WithOrgUrl(oktaOrgURL),
+			okta.WithToken(oktaAPIToken),
+		)
+		if err != nil {
+			return err
+		}
+		
+		// Test the connection by making a simple API call
+		_, _, err = client.User.ListUsers(context.TODO(), nil)
+		if err != nil {
+			return err
+		}
+		
+		return envConnectedMsg{client: client}
+	}
+}
+
+func (m *model) handleConnection(envMsg envConnectedMsg) (tea.Model, tea.Cmd) {
+	// Set up the client and initialize the list
+	m.client = envMsg.client
+	m.list = list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	m.list.Title = "Okta Users"
+	m.state = listView
+	m.isLoading = true
+	
+	return m, m.reloadUsers()
 }
 
 func (m *model) createUser() tea.Cmd {
