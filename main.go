@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -44,6 +45,14 @@ func main() {
 	}
 }
 
+type appState int
+
+const (
+	listView appState = iota
+	userDetailView
+	createUserView
+)
+
 type model struct {
 	list         list.Model
 	err          error
@@ -52,6 +61,17 @@ type model struct {
 	selectedUser *okta.User
 	viewport     viewport.Model
 	client       *okta.Client
+	state        appState
+	createForm   createUserForm
+}
+
+type createUserForm struct {
+	inputs       []textinput.Model
+	focused      int
+	fieldNames   []string
+	required     []bool
+	values       map[string]string
+	creating     bool
 }
 
 func newProgram(oktaOrgURL, oktaAPIToken string) (*model, error) {
@@ -65,10 +85,12 @@ func newProgram(oktaOrgURL, oktaAPIToken string) (*model, error) {
 	}
 
 	m := &model{
-		list:      list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0),
-		isLoading: true,
-		client:    client,
-		viewport:  viewport.New(0, 0),
+		list:       list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0),
+		isLoading:  true,
+		client:     client,
+		viewport:   viewport.New(0, 0),
+		state:      listView,
+		createForm: newCreateUserForm(),
 	}
 
 	// fetch okta users and init list with them
@@ -80,8 +102,35 @@ func newProgram(oktaOrgURL, oktaAPIToken string) (*model, error) {
 	return m, nil
 }
 
+func newCreateUserForm() createUserForm {
+	fieldNames := []string{"login", "firstName", "lastName", "email", "displayName", "middleName", "title", "department"}
+	required := []bool{true, true, true, true, false, false, false, false}
+	inputs := make([]textinput.Model, len(fieldNames))
+	
+	for i := range inputs {
+		inputs[i] = textinput.New()
+		inputs[i].Placeholder = fieldNames[i]
+		if required[i] {
+			inputs[i].Placeholder += " (required)"
+		}
+		inputs[i].CharLimit = 256
+		inputs[i].Width = 50
+	}
+	
+	inputs[0].Focus()
+	
+	return createUserForm{
+		inputs:     inputs,
+		focused:    0,
+		fieldNames: fieldNames,
+		required:   required,
+		values:     make(map[string]string),
+		creating:   false,
+	}
+}
+
 func (m *model) Init() tea.Cmd {
-	return nil // no init for this version
+	return nil
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -91,45 +140,184 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.SetSize(msg.Width-h, msg.Height-v)
 		m.viewport.Width = msg.Width - h
 		m.viewport.Height = msg.Height - v
+		
 	case tea.KeyMsg:
-		if m.selectedUser != nil {
-			if msg.String() == "esc" {
-				m.selectedUser = nil
-				return m, nil
-			}
-			// viewport scrolling
-			var cmd tea.Cmd
-			m.viewport, cmd = m.viewport.Update(msg)
-			return m, cmd
+		switch m.state {
+		case listView:
+			return m.updateListView(msg)
+		case userDetailView:
+			return m.updateUserDetailView(msg)
+		case createUserView:
+			return m.updateCreateUserView(msg)
 		}
-
-		if msg.String() == "enter" {
-			i, ok := m.list.SelectedItem().(oktaUser)
-			if ok {
-				return m, m.fetchUserProfile(i.Login)
-			}
-		}
-		if msg.String() == "q" || msg.String() == "ctrl+c" {
-			return m, tea.Quit
-		}
+		
 	case *okta.User:
 		m.selectedUser = msg
+		m.state = userDetailView
 		m.viewport.SetContent(formatUserProfile(msg))
 		return m, nil
+		
+	case userCreatedMsg:
+		m.state = listView
+		m.createForm = newCreateUserForm()
+		return m, m.reloadUsers()
+		
 	case error:
 		m.err = msg
 		return m, nil
+	}
+	
+	var cmd tea.Cmd
+	if m.state == listView {
+		m.list, cmd = m.list.Update(msg)
+	}
+	return m, cmd
+}
+
+type userCreatedMsg struct{}
+
+func (m *model) updateListView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		i, ok := m.list.SelectedItem().(oktaUser)
+		if ok {
+			return m, m.fetchUserProfile(i.Login)
+		}
+	case "n", "ctrl+n":
+		m.state = createUserView
+		return m, nil
+	case "q", "ctrl+c":
+		return m, tea.Quit
 	}
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	return m, cmd
 }
 
-func (m *model) View() string {
-	if m.selectedUser != nil {
-		return m.viewport.View()
+func (m *model) updateUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.selectedUser = nil
+		m.state = listView
+		return m, nil
+	case "q", "ctrl+c":
+		return m, tea.Quit
 	}
-	return appStyle.Render(m.list.View())
+	var cmd tea.Cmd
+	m.viewport, cmd = m.viewport.Update(msg)
+	return m, cmd
+}
+
+func (m *model) updateCreateUserView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.state = listView
+		m.createForm = newCreateUserForm()
+		return m, nil
+	case "tab", "down":
+		m.createForm.inputs[m.createForm.focused].Blur()
+		m.createForm.focused = (m.createForm.focused + 1) % len(m.createForm.inputs)
+		m.createForm.inputs[m.createForm.focused].Focus()
+		return m, nil
+	case "shift+tab", "up":
+		m.createForm.inputs[m.createForm.focused].Blur()
+		m.createForm.focused = (m.createForm.focused - 1 + len(m.createForm.inputs)) % len(m.createForm.inputs)
+		m.createForm.inputs[m.createForm.focused].Focus()
+		return m, nil
+	case "enter":
+		if m.canCreateUser() && !m.createForm.creating {
+			m.createForm.creating = true
+			return m, m.createUser()
+		}
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	}
+	
+	var cmd tea.Cmd
+	m.createForm.inputs[m.createForm.focused], cmd = m.createForm.inputs[m.createForm.focused].Update(msg)
+	return m, cmd
+}
+
+func (m *model) View() string {
+	switch m.state {
+	case listView:
+		return appStyle.Render(m.list.View() + "\n\nPress 'n' to create new user, 'enter' to view details, 'q' to quit")
+	case userDetailView:
+		return m.viewport.View()
+	case createUserView:
+		return m.renderCreateUserForm()
+	}
+	return ""
+}
+
+func (m *model) canCreateUser() bool {
+	for i, required := range m.createForm.required {
+		if required && strings.TrimSpace(m.createForm.inputs[i].Value()) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *model) renderCreateUserForm() string {
+	var b strings.Builder
+	b.WriteString("Create New User\n\n")
+	
+	for i, input := range m.createForm.inputs {
+		fieldName := m.createForm.fieldNames[i]
+		if m.createForm.required[i] {
+			fieldName += " *"
+		}
+		b.WriteString(fmt.Sprintf("%s:\n", fieldName))
+		b.WriteString(input.View())
+		b.WriteString("\n\n")
+	}
+	
+	if m.createForm.creating {
+		b.WriteString("Creating user...")
+	} else if m.canCreateUser() {
+		b.WriteString("Press 'enter' to create user")
+	} else {
+		b.WriteString("Please fill in all required fields (*)")
+	}
+	
+	b.WriteString("\n\nPress 'esc' to cancel, 'tab'/'down' to next field, 'shift+tab'/'up' to previous field")
+	
+	return appStyle.Render(b.String())
+}
+
+func (m *model) createUser() tea.Cmd {
+	return func() tea.Msg {
+		profile := make(map[string]interface{})
+		
+		for i, fieldName := range m.createForm.fieldNames {
+			value := strings.TrimSpace(m.createForm.inputs[i].Value())
+			if value != "" {
+				profile[fieldName] = value
+			}
+		}
+		
+		userProfile := okta.UserProfile(profile)
+		createUserRequest := okta.CreateUserRequest{
+			Profile: &userProfile,
+		}
+		
+		_, _, err := m.client.User.CreateUser(context.TODO(), createUserRequest, nil)
+		if err != nil {
+			return err
+		}
+		
+		return userCreatedMsg{}
+	}
+}
+
+func (m *model) reloadUsers() tea.Cmd {
+	return func() tea.Msg {
+		if err := m.loadOktaUsers(); err != nil {
+			return err
+		}
+		return nil
+	}
 }
 
 func (m *model) fetchUserProfile(login string) tea.Cmd {
