@@ -30,7 +30,7 @@ func main() {
 
 	var p *model
 	var err error
-	
+
 	if oktaOrgURL == "" || oktaAPIToken == "" {
 		p = newProgramWithEnvSetup()
 	} else {
@@ -78,12 +78,12 @@ type envSetupForm struct {
 }
 
 type createUserForm struct {
-	inputs       []textinput.Model
-	focused      int
-	fieldNames   []string
-	required     []bool
-	values       map[string]string
-	creating     bool
+	inputs     []textinput.Model
+	focused    int
+	fieldNames []string
+	required   []bool
+	values     map[string]string
+	creating   bool
 }
 
 func newProgram(oktaOrgURL, oktaAPIToken string) (*model, error) {
@@ -128,21 +128,21 @@ func newProgramWithEnvSetup() *model {
 func newEnvSetupForm() envSetupForm {
 	fieldNames := []string{"OKTA_ORG_URL", "OKTA_API_TOKEN"}
 	inputs := make([]textinput.Model, len(fieldNames))
-	
+
 	for i := range inputs {
 		inputs[i] = textinput.New()
 		inputs[i].Placeholder = fieldNames[i]
 		inputs[i].CharLimit = 256
 		inputs[i].Width = 60
-		
+
 		if fieldNames[i] == "OKTA_API_TOKEN" {
 			inputs[i].EchoMode = textinput.EchoPassword
 			inputs[i].EchoCharacter = '•'
 		}
 	}
-	
+
 	inputs[0].Focus()
-	
+
 	return envSetupForm{
 		inputs:     inputs,
 		focused:    0,
@@ -155,7 +155,7 @@ func newCreateUserForm() createUserForm {
 	fieldNames := []string{"login", "firstName", "lastName", "email", "displayName", "middleName", "title", "department"}
 	required := []bool{true, true, true, true, false, false, false, false}
 	inputs := make([]textinput.Model, len(fieldNames))
-	
+
 	for i := range inputs {
 		inputs[i] = textinput.New()
 		inputs[i].Placeholder = fieldNames[i]
@@ -165,9 +165,9 @@ func newCreateUserForm() createUserForm {
 		inputs[i].CharLimit = 256
 		inputs[i].Width = 50
 	}
-	
+
 	inputs[0].Focus()
-	
+
 	return createUserForm{
 		inputs:     inputs,
 		focused:    0,
@@ -189,7 +189,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.SetSize(msg.Width-h, msg.Height-v)
 		m.viewport.Width = msg.Width - h
 		m.viewport.Height = msg.Height - v
-		
+
 	case tea.KeyMsg:
 		switch m.state {
 		case envSetupView:
@@ -201,26 +201,26 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case createUserView:
 			return m.updateCreateUserView(msg)
 		}
-		
+
 	case *okta.User:
 		m.selectedUser = msg
 		m.state = userDetailView
 		m.viewport.SetContent(formatUserProfile(msg))
 		return m, nil
-		
+
 	case userCreatedMsg:
 		m.state = listView
 		m.createForm = newCreateUserForm()
 		return m, m.reloadUsers()
-		
+
 	case envConnectedMsg:
 		return m.handleConnection(msg)
-		
+
 	case error:
 		m.err = msg
 		return m, nil
 	}
-	
+
 	var cmd tea.Cmd
 	if m.state == listView {
 		m.list, cmd = m.list.Update(msg)
@@ -289,9 +289,23 @@ func (m *model) updateCreateUserView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	}
-	
+
 	var cmd tea.Cmd
+	oldLoginValue := m.createForm.inputs[0].Value()
 	m.createForm.inputs[m.createForm.focused], cmd = m.createForm.inputs[m.createForm.focused].Update(msg)
+
+	// If we're editing the login field and the email hasn't been manually changed,
+	// update the email to match the login
+	if m.createForm.focused == 0 {
+		newLoginValue := m.createForm.inputs[0].Value()
+		if newLoginValue != oldLoginValue {
+			emailValue := m.createForm.inputs[3].Value()
+			if emailValue == "" || emailValue == oldLoginValue {
+				m.createForm.inputs[3].SetValue(newLoginValue)
+			}
+		}
+	}
+
 	return m, cmd
 }
 
@@ -315,7 +329,7 @@ func (m *model) updateEnvSetupView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	}
-	
+
 	var cmd tea.Cmd
 	m.envForm.inputs[m.envForm.focused], cmd = m.envForm.inputs[m.envForm.focused].Update(msg)
 	return m, cmd
@@ -325,7 +339,7 @@ func (m *model) View() string {
 	if m.err != nil {
 		return appStyle.Render(fmt.Sprintf("Error: %v\n\nPress 'q' to quit", m.err))
 	}
-	
+
 	switch m.state {
 	case envSetupView:
 		return m.renderEnvSetupForm()
@@ -351,7 +365,7 @@ func (m *model) canCreateUser() bool {
 func (m *model) renderCreateUserForm() string {
 	var b strings.Builder
 	b.WriteString("Create New User\n\n")
-	
+
 	for i, input := range m.createForm.inputs {
 		fieldName := m.createForm.fieldNames[i]
 		if m.createForm.required[i] {
@@ -361,7 +375,7 @@ func (m *model) renderCreateUserForm() string {
 		b.WriteString(input.View())
 		b.WriteString("\n\n")
 	}
-	
+
 	if m.createForm.creating {
 		b.WriteString("Creating user...")
 	} else if m.canCreateUser() {
@@ -369,9 +383,9 @@ func (m *model) renderCreateUserForm() string {
 	} else {
 		b.WriteString("Please fill in all required fields (*)")
 	}
-	
+
 	b.WriteString("\n\nPress 'esc' to cancel, 'tab'/'down' to next field, 'shift+tab'/'up' to previous field")
-	
+
 	return appStyle.Render(b.String())
 }
 
@@ -388,14 +402,14 @@ func (m *model) renderEnvSetupForm() string {
 	var b strings.Builder
 	b.WriteString("Okta Configuration Setup\n")
 	b.WriteString("Please enter your Okta configuration details:\n\n")
-	
+
 	for i, input := range m.envForm.inputs {
 		fieldName := m.envForm.fieldNames[i]
 		b.WriteString(fmt.Sprintf("%s:\n", fieldName))
 		b.WriteString(input.View())
 		b.WriteString("\n\n")
 	}
-	
+
 	if m.envForm.connecting {
 		b.WriteString("Connecting to Okta...")
 	} else if m.canConnect() {
@@ -403,9 +417,9 @@ func (m *model) renderEnvSetupForm() string {
 	} else {
 		b.WriteString("Please fill in all fields")
 	}
-	
+
 	b.WriteString("\n\nPress 'tab'/'down' to next field, 'shift+tab'/'up' to previous field, 'q' to quit")
-	
+
 	return appStyle.Render(b.String())
 }
 
@@ -413,7 +427,7 @@ func (m *model) connectToOkta() tea.Cmd {
 	return func() tea.Msg {
 		oktaOrgURL := strings.TrimSpace(m.envForm.inputs[0].Value())
 		oktaAPIToken := strings.TrimSpace(m.envForm.inputs[1].Value())
-		
+
 		_, client, err := okta.NewClient(
 			context.TODO(),
 			okta.WithOrgUrl(oktaOrgURL),
@@ -422,13 +436,13 @@ func (m *model) connectToOkta() tea.Cmd {
 		if err != nil {
 			return err
 		}
-		
+
 		// Test the connection by making a simple API call
 		_, _, err = client.User.ListUsers(context.TODO(), nil)
 		if err != nil {
 			return err
 		}
-		
+
 		return envConnectedMsg{client: client}
 	}
 }
@@ -440,31 +454,31 @@ func (m *model) handleConnection(envMsg envConnectedMsg) (tea.Model, tea.Cmd) {
 	m.list.Title = "Okta Users"
 	m.state = listView
 	m.isLoading = true
-	
+
 	return m, m.reloadUsers()
 }
 
 func (m *model) createUser() tea.Cmd {
 	return func() tea.Msg {
 		profile := make(map[string]interface{})
-		
+
 		for i, fieldName := range m.createForm.fieldNames {
 			value := strings.TrimSpace(m.createForm.inputs[i].Value())
 			if value != "" {
 				profile[fieldName] = value
 			}
 		}
-		
+
 		userProfile := okta.UserProfile(profile)
 		createUserRequest := okta.CreateUserRequest{
 			Profile: &userProfile,
 		}
-		
+
 		_, _, err := m.client.User.CreateUser(context.TODO(), createUserRequest, nil)
 		if err != nil {
 			return err
 		}
-		
+
 		return userCreatedMsg{}
 	}
 }
